@@ -34,5 +34,5 @@ cart={rid:o.rid,items:it};upd();openCart();}
 orders.forEach(o=>{if(o.k<3&&o.st!="Cancelado")track(o.num,o.k)});draw();
 const thRoot=document.documentElement,thMq=matchMedia("(prefers-color-scheme:dark)"),thEff=()=>thRoot.dataset.theme||(thMq.matches?"dark":"light");
 function thIcon(){const b=$("#th"),d=thEff()=="dark",t=d?"Mudar para modo claro":"Mudar para modo escuro";b.textContent=d?"☀️":"🌙";b.setAttribute("aria-label",t);b.title=t}
-function setTheme(){const n=thEff()=="dark"?"light":"dark";thRoot.dataset.theme=n;ls.set("theme",n);thIcon()}
+let thT;function setTheme(){const n=thEff()=="dark"?"light":"dark";thRoot.classList.add("tt");thRoot.dataset.theme=n;ls.set("theme",n);thIcon();clearTimeout(thT);thT=setTimeout(()=>thRoot.classList.remove("tt"),600)}
 thMq.addEventListener("change",thIcon);thIcon();
