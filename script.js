@@ -24,6 +24,9 @@ const nm=t=>t.normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase();
 // note = observações do pedido; tip = gorjeta; pay = forma de pagamento; troco = troco para quanto;
 // orders = histórico de pedidos; shown = número do pedido que está aberto no painel.
 let cat="Todos",q="",fl="",cur=null,addr=ls.get("addr",""),cart=ls.get("cart",{rid:null,items:{}}),coupon=false,tt,note="",tip=0,pay="Pix",troco="",orders=ls.get("orders",[]),shown=0;
+// Estado da conta: users = contas cadastradas (nome, e-mail, salt e hash da senha, nunca a senha em si);
+// sess = e-mail da pessoa logada ("" = ninguém); fails = tentativas erradas seguidas; lockUntil = até quando o login fica bloqueado.
+let users=ls.get("users",[]),sess=ls.get("sess",""),fails=0,lockUntil=0;
 // HR = horários especiais [abre, fecha] por id de restaurante (os demais usam 10h às 23h).
 // OUT = itens esgotados, no formato "idRestaurante-indiceDoItem".
 const HR={5:[18,23],6:[11,23]},OUT={"3-1":1};
@@ -93,7 +96,7 @@ if(cart.rid!==cur.id)cart={rid:cur.id,items:{}};cart.items[i]=(cart.items[i]||0)
 function chg(i,d){cart.items[i]+=d;if(cart.items[i]<=0)delete cart.items[i];if(!cnt())cart={rid:null,items:{}};upd();sheet();}
 
 // upd = atualiza a interface: contador do carrinho, endereço no topo e a barra fixa da sacola; também salva os dados.
-function upd(){save();const n=cnt();$("#cc").textContent=n;$("#ad").textContent=addr||"Escolher endereço";const b=$("#bar");b.hidden=!n;b.innerHTML=n?`<span>🛒 ${n} ${n>1?"itens":"item"} · ${rr().n}</span><span>Ver sacola · ${brl(sub())}</span>`:"";}
+function upd(){save();authUI();const n=cnt();$("#cc").textContent=n;$("#ad").textContent=addr||"Escolher endereço";const b=$("#bar");b.hidden=!n;b.innerHTML=n?`<span>🛒 ${n} ${n>1?"itens":"item"} · ${rr().n}</span><span>Ver sacola · ${brl(sub())}</span>`:"";}
 
 // show = coloca o HTML recebido dentro do painel deslizante e abre o painel.
 function show(h){shown=0;$("#sheet").innerHTML=h;$("#ov").hidden=false}
@@ -104,8 +107,65 @@ function openCart(){shown=0;$("#ov").hidden=false;sheet()}
 // closeCart = fecha o painel deslizante.
 function closeCart(){shown=0;$("#ov").hidden=true}
 
-// login = abre o painel "Entrar ou cadastrar" e valida se o e-mail digitado tem formato válido.
-function login(){show(`<h2>Entrar ou cadastrar</h2><p class="mute">Entrar é opcional: você pode pedir como convidado.</p><div class="cp"><input id="em" type="email" aria-label="E-mail" placeholder="email@email.com.br"></div><button class="cta" onclick="if(/^\S+@\S+\.\S+$/.test($('#em').value.trim())){closeCart();toast('Bem-vindo ao Esfomeado!')}else toast('Digite um e-mail válido')">Continuar</button>`)}
+// ---------- Conta: cadastro, login e sessão ----------
+// normEmail = deixa o e-mail em minúsculas e sem espaços, para "Ana@x.com " e "ana@x.com" serem a mesma conta.
+const normEmail=e=>e.trim().toLowerCase();
+// okEmail = confere o formato do e-mail (algo@dominio.tld).
+const okEmail=e=>/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(e)&&e.length<=120;
+// pwOk = regra de senha: no mínimo 8 caracteres, com pelo menos uma letra e um número.
+const pwOk=p=>p.length>=8&&p.length<=64&&/[A-Za-z]/.test(p)&&/\d/.test(p);
+// user = devolve a conta da pessoa logada (ou undefined se ninguém estiver logado).
+const user=()=>users.find(u=>u.email==sess);
+// b2h = converte bytes em texto hexadecimal; rndSalt = gera um "salt" aleatório de 16 bytes (único para cada conta).
+const b2h=b=>[...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,"0")).join("");
+const rndSalt=()=>b2h(crypto.getRandomValues(new Uint8Array(16)));
+// hashPw = transforma a senha em um hash irreversível (PBKDF2 com SHA-256, 120 mil voltas e o salt da conta).
+// A senha digitada nunca é guardada. Se o navegador não tiver crypto.subtle (página fora de https), usa um hash simples e mais fraco.
+async function hashPw(pw,salt){
+if(crypto.subtle){const enc=new TextEncoder(),k=await crypto.subtle.importKey("raw",enc.encode(pw),"PBKDF2",false,["deriveBits"]);
+return b2h(await crypto.subtle.deriveBits({name:"PBKDF2",hash:"SHA-256",salt:enc.encode(salt),iterations:120000},k,256))}
+let h=0x811c9dc5;const s=salt+pw;for(let r=0;r<2000;r++)for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619)}
+return(h>>>0).toString(16)}
+// aerr = mostra uma mensagem de erro dentro do formulário de login/cadastro.
+const aerr=m=>{$("#aerr").textContent=m};
+// authUI = atualiza o botão do topo: "Entrar" se ninguém está logado, ou "Olá, Nome" se estiver.
+function authUI(){const u=user();$("#lg").textContent=u?"Olá, "+u.nome.split(" ")[0]:"Entrar"}
+// login = chamada pelo botão do topo: abre a tela da conta se já está logado; senão, o formulário de entrar/criar conta.
+function login(){user()?accountSheet():authSheet("in")}
+// authSheet = desenha o formulário. t="in" mostra Entrar (e-mail e senha); t="up" mostra Criar conta (nome, e-mail, senha e confirmação).
+function authSheet(t){const up=t=="up";
+show(`<h2>${up?"Criar conta":"Entrar"}</h2><div class="tips"><button type="button" class="chip${up?"":" on"}" onclick="authSheet('in')">Entrar</button><button type="button" class="chip${up?" on":""}" onclick="authSheet('up')">Criar conta</button></div><form onsubmit="${up?"doSignup":"doLogin"}(event)" novalidate>${up?`<div class="cp"><input id="an" aria-label="Nome" placeholder="Seu nome" autocomplete="name" maxlength="60"></div>`:""}<div class="cp"><input id="em" type="email" aria-label="E-mail" placeholder="email@email.com.br" autocomplete="email" maxlength="120"></div><div class="cp"><input id="pw" type="password" aria-label="Senha" placeholder="${up?"Senha (mín. 8, com letra e número)":"Senha"}" autocomplete="${up?"new-password":"current-password"}" maxlength="64"></div>${up?`<div class="cp"><input id="pw2" type="password" aria-label="Confirmar senha" placeholder="Repita a senha" autocomplete="new-password" maxlength="64"></div>`:""}<label class="mute sm"><input type="checkbox" onchange="['#pw','#pw2'].forEach(s=>{const e=$(s);if(e)e.type=this.checked?'text':'password'})"> Mostrar senha</label><div id="aerr" class="warn" role="alert"></div><button class="cta" id="asub" type="submit">${up?"Criar conta":"Entrar"}</button></form><p class="mute sm">Entrar é opcional: você também pode pedir como convidado.</p>`);
+const f=$("#an")||$("#em");f&&f.focus()}
+// doSignup = cria a conta: valida nome, e-mail, senha e confirmação, impede e-mail repetido,
+// guarda só o hash da senha e já deixa a pessoa logada.
+async function doSignup(ev){ev.preventDefault();
+const nome=$("#an").value.trim().replace(/\s+/g," "),email=normEmail($("#em").value),pw=$("#pw").value,pw2=$("#pw2").value;
+if(nome.length<2)return aerr("Digite seu nome (mínimo 2 letras).");
+if(!okEmail(email))return aerr("Digite um e-mail válido.");
+if(!pwOk(pw))return aerr("A senha precisa ter de 8 a 64 caracteres, com letras e números.");
+if(pw!==pw2)return aerr("As senhas não conferem.");
+if(users.some(u=>u.email==email))return aerr("Já existe uma conta com esse e-mail. Tente entrar.");
+const b=$("#asub");b.disabled=true;
+try{const salt=rndSalt(),hash=await hashPw(pw,salt);users.push({nome,email,salt,hash,criado:Date.now()});ls.set("users",users);sess=email;ls.set("sess",sess);closeCart();upd();toast("Conta criada! Bem-vindo(a), "+nome.split(" ")[0])}
+catch(e){aerr("Não foi possível criar a conta. Tente novamente.");b.disabled=false}}
+// doLogin = entra na conta: confere e-mail e senha comparando o hash. A mensagem de erro é a mesma para
+// "e-mail não existe" e "senha errada" (não revela quais e-mails têm conta) e, após 5 erros seguidos, bloqueia por 30 segundos.
+async function doLogin(ev){ev.preventDefault();
+const wait=Math.ceil((lockUntil-Date.now())/1000);
+if(wait>0)return aerr("Muitas tentativas. Aguarde "+wait+"s.");
+const email=normEmail($("#em").value),pw=$("#pw").value;
+if(!okEmail(email)||!pw)return aerr("Informe e-mail e senha.");
+const b=$("#asub");b.disabled=true;
+try{const u=users.find(x=>x.email==email),h=await hashPw(pw,u?u.salt:"0".repeat(32));
+if(u&&h===u.hash){fails=0;sess=email;ls.set("sess",sess);closeCart();upd();toast("Bem-vindo(a) de volta, "+u.nome.split(" ")[0]);return}
+if(++fails>=5){fails=0;lockUntil=Date.now()+30000;aerr("Muitas tentativas. Aguarde 30s.")}else aerr("E-mail ou senha incorretos.")}
+catch(e){aerr("Não foi possível entrar. Tente novamente.")}
+b.disabled=false}
+// accountSheet = tela da conta logada: mostra nome e e-mail, atalho para os pedidos e o botão de sair.
+function accountSheet(){const u=user();if(!u)return authSheet("in");
+show(`<h2>Olá, ${esc(u.nome.split(" ")[0])}!</h2><div class="mute">${esc(u.nome)} · ${esc(u.email)}</div><button class="cta sec" onclick="ordersSheet()">Meus pedidos</button><button class="cta sec" onclick="logout()">Sair da conta</button>`)}
+// logout = encerra a sessão (a conta continua cadastrada; só a pessoa deixa de estar logada).
+function logout(){sess="";ls.set("sess","");closeCart();upd();toast("Você saiu da conta")}
 
 // addrSheet = abre o painel para informar o endereço de entrega e confirma o que foi digitado.
 function addrSheet(){show(`<h2>Onde vamos entregar?</h2><div class="cp"><input id="ai" value="${esc(addr)}" placeholder="Rua, número, bairro" autocomplete="street-address"></div><button class="cta" onclick="addr=$('#ai').value||addr;upd();closeCart()">Confirmar endereço</button>`)}

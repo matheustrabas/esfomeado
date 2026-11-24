@@ -23,8 +23,8 @@
 <div class="srch"><span>🔍</span><input id="si" aria-label="Buscar restaurante ou prato" placeholder="Buscar restaurante ou prato" oninput="srch(this.value)"></div>
 <!-- Abre o histórico de pedidos. -->
 <button class="bo mp" onclick="ordersSheet()">Meus pedidos</button>
-<!-- Abre o painel de login. -->
-<button class="bo" onclick="login()">Entrar</button>
+<!-- Abre o painel de login e cadastro (ou da conta, se já estiver logado). O texto vira "Olá, Nome" depois de entrar (authUI). -->
+<button class="bo" id="lg" onclick="login()">Entrar</button>
 <!-- Alterna entre tema claro e escuro. -->
 <button class="bo" id="th" onclick="setTheme()" aria-label="Alternar tema">🌙</button>
 <!-- Abre a sacola; #cc mostra a quantidade de itens. -->

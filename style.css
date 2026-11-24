@@ -111,3 +111,5 @@ textarea{width:100%;border:1.5px solid var(--line);border-radius:12px;padding:10
 .i1{background-image:url(img/restaurante-1.jpg)}.i2{background-image:url(img/restaurante-2.jpg)}.i3{background-image:url(img/restaurante-3.jpg)}.i4{background-image:url(img/restaurante-4.jpg)}.i5{background-image:url(img/restaurante-5.jpg)}.i6{background-image:url(img/restaurante-6.jpg)}.i7{background-image:url(img/restaurante-7.jpg)}.i8{background-image:url(img/restaurante-8.jpg)}.hero::before{background-image:url(img/hero.jpg)}
 /* Transição suave de cores ao trocar de tema (classe .tt). */
 @media(prefers-reduced-motion:no-preference){.tt,.tt *,.tt *::before,.tt *::after{transition:background-color .45s ease,color .45s ease,border-color .45s ease,box-shadow .45s ease,fill .45s ease!important}}
+/* BOTÃO DE LOGIN: limita a largura para um nome comprido não quebrar o cabeçalho. */
+#lg{max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
