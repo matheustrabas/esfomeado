@@ -129,11 +129,18 @@ const b2h=b=>[...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,"0")).join(
 const rndSalt=()=>b2h(crypto.getRandomValues(new Uint8Array(16)));
 // hashPw = transforma a senha em um hash irreversível (PBKDF2 com SHA-256, 120 mil voltas e o salt da conta).
 // A senha digitada nunca é guardada. Se o navegador não tiver crypto.subtle (página fora de https), usa um hash simples e mais fraco.
-async function hashPw(pw,salt){
-if(crypto.subtle){const enc=new TextEncoder(),k=await crypto.subtle.importKey("raw",enc.encode(pw),"PBKDF2",false,["deriveBits"]);
+const hasSub=!!(window.crypto&&crypto.subtle);
+async function hashPw(pw,salt,alg){alg=alg||(hasSub?"p":"f");
+if(alg=="p"){if(!hasSub)return null;const enc=new TextEncoder(),k=await crypto.subtle.importKey("raw",enc.encode(pw),"PBKDF2",false,["deriveBits"]);
 return b2h(await crypto.subtle.deriveBits({name:"PBKDF2",hash:"SHA-256",salt:enc.encode(salt),iterations:120000},k,256))}
 let h=0x811c9dc5;const s=salt+pw;for(let r=0;r<2000;r++)for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619)}
 return(h>>>0).toString(16)}
+// cred = gera salt + hash + algoritmo para guardar na conta. checkPw = confere a senha usando o algoritmo guardado na conta
+// (contas antigas, sem algoritmo guardado, são testadas nos dois e atualizadas). Devolve "ok", "bad" ou "nocrypto".
+async function cred(pw){const salt=rndSalt(),alg=hasSub?"p":"f";return{salt,alg,hash:await hashPw(pw,salt,alg)}}
+async function checkPw(u,pw){const algs=u.alg?[u.alg]:["p","f"];let miss=0;
+for(const a of algs){const h=await hashPw(pw,u.salt,a);if(h===null){miss++;continue}if(h===u.hash){if(!u.alg){u.alg=a;ls.set("users",users)}return"ok"}}
+return miss==algs.length?"nocrypto":"bad"}
 // aerr = mostra uma mensagem de erro dentro do formulário de login/cadastro.
 const aerr=m=>{$("#aerr").textContent=m};
 // authUI = atualiza o botão do topo: "Entrar" se ninguém está logado, ou "Olá, Nome" se estiver.
@@ -142,7 +149,7 @@ function authUI(){const u=user();$("#lg").textContent=u?"Olá, "+u.nome.split(" 
 function login(){user()?accountSheet():authSheet("in")}
 // authSheet = desenha o formulário. t="in" mostra Entrar (e-mail e senha); t="up" mostra Criar conta (nome, e-mail, senha e confirmação).
 function authSheet(t){const up=t=="up";
-show(`<h2>${up?"Criar conta":"Entrar"}</h2><div class="tips"><button type="button" class="chip${up?"":" on"}" onclick="authSheet('in')">Entrar</button><button type="button" class="chip${up?" on":""}" onclick="authSheet('up')">Criar conta</button></div><form onsubmit="${up?"doSignup":"doLogin"}(event)" novalidate>${up?`<div class="cp"><input id="an" aria-label="Nome" placeholder="Seu nome" autocomplete="name" maxlength="60"></div>`:""}<div class="cp"><input id="em" type="email" aria-label="E-mail" placeholder="email@email.com.br" autocomplete="email" maxlength="120"></div><div class="cp"><input id="pw" type="password" aria-label="Senha" placeholder="${up?"Senha (mín. 8, com letra e número)":"Senha"}" autocomplete="${up?"new-password":"current-password"}" maxlength="64"></div>${up?`<div class="cp"><input id="pw2" type="password" aria-label="Confirmar senha" placeholder="Repita a senha" autocomplete="new-password" maxlength="64"></div>`:""}<label class="mute sm"><input type="checkbox" onchange="['#pw','#pw2'].forEach(s=>{const e=$(s);if(e)e.type=this.checked?'text':'password'})"> Mostrar senha</label><div id="aerr" class="warn" role="alert"></div><button class="cta" id="asub" type="submit">${up?"Criar conta":"Entrar"}</button></form><p class="mute sm">Entrar é opcional: você também pode pedir como convidado.</p>`);
+show(`<h2>${up?"Criar conta":"Entrar"}</h2><div class="tips"><button type="button" class="chip${up?"":" on"}" onclick="authSheet('in')">Entrar</button><button type="button" class="chip${up?" on":""}" onclick="authSheet('up')">Criar conta</button></div><form onsubmit="${up?"doSignup":"doLogin"}(event)" novalidate>${up?`<div class="cp"><input id="an" aria-label="Nome" placeholder="Seu nome" autocomplete="name" maxlength="60"></div>`:""}<div class="cp"><input id="em" type="email" aria-label="E-mail" placeholder="email@email.com.br" autocomplete="email" maxlength="120"></div><div class="cp"><input id="pw" type="password" aria-label="Senha" placeholder="${up?"Senha (mín. 8, com letra e número)":"Senha"}" autocomplete="${up?"new-password":"current-password"}" maxlength="64"></div>${up?`<div class="cp"><input id="pw2" type="password" aria-label="Confirmar senha" placeholder="Repita a senha" autocomplete="new-password" maxlength="64"></div>`:""}<label class="mute sm"><input type="checkbox" onchange="['#pw','#pw2'].forEach(s=>{const e=$(s);if(e)e.type=this.checked?'text':'password'})"> Mostrar senha</label><div id="aerr" class="warn" role="alert"></div><button class="cta" id="asub" type="submit">${up?"Criar conta":"Entrar"}</button></form><p class="mute sm">Entrar é opcional: você também pode pedir como convidado.</p><button type="button" class="bo" onclick="adminAuthSheet()">🔐 Acesso administrativo</button>`);
 const f=$("#an")||$("#em");f&&f.focus()}
 // doSignup = cria a conta: valida nome, e-mail, senha e confirmação, impede e-mail repetido,
 // guarda só o hash da senha e já deixa a pessoa logada.
@@ -152,21 +159,27 @@ if(nome.length<2)return aerr("Digite seu nome (mínimo 2 letras).");
 if(!okEmail(email))return aerr("Digite um e-mail válido.");
 if(!pwOk(pw))return aerr("A senha precisa ter de 8 a 64 caracteres, com letras e números.");
 if(pw!==pw2)return aerr("As senhas não conferem.");
+if(ADMINS.some(a=>a[1]==email))return aerr("Este e-mail é reservado. Use outro.");
 if(users.some(u=>u.email==email))return aerr("Já existe uma conta com esse e-mail. Tente entrar.");
 const b=$("#asub");b.disabled=true;
-try{const salt=rndSalt(),hash=await hashPw(pw,salt);users.push({nome,email,salt,hash,criado:Date.now()});ls.set("users",users);sess=email;ls.set("sess",sess);closeCart();upd();toast("Conta criada! Bem-vindo(a), "+nome.split(" ")[0])}
+try{const cr=await cred(pw);users.push({nome,email,...cr,criado:Date.now()});ls.set("users",users);sess=email;ls.set("sess",sess);closeCart();upd();toast("Conta criada! Bem-vindo(a), "+nome.split(" ")[0])}
 catch(e){aerr("Não foi possível criar a conta. Tente novamente.");b.disabled=false}}
 // doLogin = entra na conta: confere e-mail e senha comparando o hash. A mensagem de erro é a mesma para
 // "e-mail não existe" e "senha errada" (não revela quais e-mails têm conta) e, após 5 erros seguidos, bloqueia por 30 segundos.
-async function doLogin(ev){ev.preventDefault();
+async function doLogin(ev){ev.preventDefault();await tryLogin(false)}
+async function doAdminLogin(ev){ev.preventDefault();await tryLogin(true)}
+async function tryLogin(onlyAdm){await ready;
 const wait=Math.ceil((lockUntil-Date.now())/1000);
 if(wait>0)return aerr("Muitas tentativas. Aguarde "+wait+"s.");
 const email=normEmail($("#em").value),pw=$("#pw").value;
 if(!okEmail(email)||!pw)return aerr("Informe e-mail e senha.");
 const b=$("#asub");b.disabled=true;
-try{const u=users.find(x=>x.email==email),h=await hashPw(pw,u?u.salt:"0".repeat(32));
-if(u&&h===u.hash){fails=0;sess=email;ls.set("sess",sess);closeCart();upd();toast("Bem-vindo(a) de volta, "+u.nome.split(" ")[0]);if(u.role=="admin"||u.role=="rest")adminOpen();return}
-if(++fails>=5){fails=0;lockUntil=Date.now()+30000;aerr("Muitas tentativas. Aguarde 30s.")}else aerr("E-mail ou senha incorretos.")}
+try{const u=users.find(x=>x.email==email&&(!onlyAdm||x.role=="admin"));
+const r=u?await checkPw(u,pw):(await hashPw(pw,"0".repeat(32)),"bad");
+if(r=="nocrypto")aerr("Este navegador não consegue verificar a senha neste endereço. Abra o site por https:// ou localhost.");
+else if(r=="ok"){fails=0;sess=email;ls.set("sess",sess);closeCart();upd();toast("Bem-vindo(a) de volta, "+u.nome.split(" ")[0]);if(u.role=="admin"||u.role=="rest")adminOpen();return}
+else if(++fails>=5){fails=0;lockUntil=Date.now()+30000;aerr("Muitas tentativas. Aguarde 30s.")}
+else aerr(onlyAdm?"Credenciais de administrador inválidas.":"E-mail ou senha incorretos.")}
 catch(e){aerr("Não foi possível entrar. Tente novamente.")}
 b.disabled=false}
 // accountSheet = tela da conta logada: mostra nome e e-mail, atalho para os pedidos e o botão de sair.
@@ -236,15 +249,26 @@ const isAdm=()=>{const u=user();return !!u&&u.role=="admin"};
 const CARGOS=["Gerente","Atendente","Cozinheiro(a)","Entregador(a)","Caixa"];
 // cl = limpa texto digitado pelo admin (tira <, > e aspas e troca & por "e"), para não quebrar o HTML das telas.
 const cl=t=>String(t).replace(/[<>"]/g,"").replace(/&/g," e ").replace(/\s+/g," ").trim();
-// seedAdmin = na primeira vez cria a conta administradora padrão (só guarda o hash da senha, nunca a senha).
-async function seedAdmin(){if(users.some(u=>u.role=="admin"))return;try{const salt=rndSalt();users.push({nome:"Administrador",email:"admin@esfomeado.com",salt,hash:await hashPw("Admin@123",salt),criado:Date.now(),role:"admin"});ls.set("users",users)}catch(e){}}
+// ADMINS = contas administradoras padrão [nome, e-mail, senha inicial]. TROQUE AS SENHAS no painel (aba Administradores).
+// seedAdmin = cria/conserta essas contas. Contas com seedv antigo (ou quebradas) são refeitas UMA vez; depois disso a senha
+// que você trocar no painel é respeitada. "ready" é a promessa que o login espera antes de conferir a senha.
+const ADMINS=[["Administrador","admin@esfomeado.com","Admin@123"],["Gestor Esfomeado","gestor@esfomeado.com","Esfomeado@2026"]],SEED_V=2;
+async function seedAdmin(){try{let ch=false;
+for(const[nome,email,pw]of ADMINS){const i=users.findIndex(u=>u.email==email),o=users[i];
+if(o&&o.role=="admin"&&o.seedv>=SEED_V)continue;
+const nu={nome,email,...await cred(pw),criado:(o&&o.criado)||Date.now(),role:"admin",seedv:SEED_V};
+if(i>=0)users[i]=nu;else users.push(nu);ch=true}
+if(ch)ls.set("users",users)}catch(e){}}
 // adminOpen = abre o painel (só para admin). admTabSet = troca entre as abas Restaurantes e Funcionários.
+// adminLogin = abre direto o painel se já é admin; senão mostra a tela de login administrativo. Também abre com o endereço terminando em #admin.
+function adminLogin(){if(isAdm()){adminOpen();return}adminAuthSheet()}
+function adminAuthSheet(){show(`<h2>🔐 Acesso administrativo</h2><p class="mute sm">Área restrita à equipe do Esfomeado.</p><form onsubmit="doAdminLogin(event)" novalidate><div class="cp"><input id="em" type="email" aria-label="E-mail do administrador" placeholder="E-mail do administrador" autocomplete="username" maxlength="120"></div><div class="cp"><input id="pw" type="password" aria-label="Senha" placeholder="Senha" autocomplete="current-password" maxlength="64"></div><label class="mute sm"><input type="checkbox" onchange="$('#pw').type=this.checked?'text':'password'"> Mostrar senha</label><div id="aerr" class="warn" role="alert"></div><button class="cta" id="asub" type="submit">Entrar no painel</button></form><button class="cta sec" type="button" onclick="authSheet('in')">← Voltar ao login normal</button>`);$("#em").focus()}
 function adminOpen(){if(!isAdm()&&!isRest()){toast("Acesso restrito a administradores");return}adm=true;cur=null;draw();scrollTo(0,0)}
 function admTabSet(t){admTab=t;admin()}
 // admin = desenha o painel com as duas abas.
 function admin(){if(isRest())return restPanel();if(!isAdm()){adm=false;go();return}
 const rs=R.filter(r=>r.id>8),fs=users.filter(u=>u.role=="func");
-$("#app").innerHTML=`<div class="adm"><button class="bo" onclick="go()">← Voltar ao app</button><h1>⚙️ Painel administrativo</h1><div class="tips"><button class="chip${admTab=="r"?" on":""}" onclick="admTabSet('r')">🍽️ Restaurantes (${rs.length})</button><button class="chip${admTab=="f"?" on":""}" onclick="admTabSet('f')">👥 Funcionários (${fs.length})</button><button class="chip${admTab=="l"?" on":""}" onclick="admTabSet('l')">🔑 Logins de restaurante</button></div>${admTab=="r"?admRest(rs):admTab=="f"?admFunc(fs):admLogins()}</div>`}
+$("#app").innerHTML=`<div class="adm"><button class="bo" onclick="go()">← Voltar ao app</button><h1>⚙️ Painel administrativo</h1><div class="tips"><button class="chip${admTab=="r"?" on":""}" onclick="admTabSet('r')">🍽️ Restaurantes (${rs.length})</button><button class="chip${admTab=="f"?" on":""}" onclick="admTabSet('f')">👥 Funcionários (${fs.length})</button><button class="chip${admTab=="l"?" on":""}" onclick="admTabSet('l')">🔑 Logins de restaurante</button><button class="chip${admTab=="a"?" on":""}" onclick="admTabSet('a')">🛡️ Administradores</button></div>${admTab=="r"?admRest(rs):admTab=="f"?admFunc(fs):admTab=="a"?admAdmins():admLogins()}</div>`}
 // admItem = uma linha de item do cardápio (prato, preço, emoji, descrição).
 const admItem=()=>`<div class="cp mi"><input class="xn" placeholder="Prato" aria-label="Nome do prato" maxlength="40"><input class="xp" type="number" min="0" step="0.01" placeholder="Preço R$" aria-label="Preço"><input class="xe" placeholder="🍔" aria-label="Emoji" maxlength="4"><input class="xd" placeholder="Descrição do prato" aria-label="Descrição do prato" maxlength="80"></div>`;
 // admRest = formulário de novo restaurante + lista dos que o admin já cadastrou.
@@ -273,11 +297,11 @@ if(nome.length<2)return aerr("Digite o nome do funcionário.");
 if(!okEmail(email))return aerr("Digite um e-mail válido.");
 if(!pwOk(pw))return aerr("A senha precisa ter de 8 a 64 caracteres, com letras e números.");
 if(users.some(u=>u.email==email))return aerr("Já existe uma conta com esse e-mail.");
-try{const salt=rndSalt(),hash=await hashPw(pw,salt);users.push({nome,email,salt,hash,criado:Date.now(),role:"func",cargo:$("#fc").value,rid:+$("#fr").value});ls.set("users",users);admin();toast("Funcionário cadastrado")}
+try{const cr=await cred(pw);users.push({nome,email,...cr,criado:Date.now(),role:"func",cargo:$("#fc").value,rid:+$("#fr").value});ls.set("users",users);admin();toast("Funcionário cadastrado")}
 catch(e){aerr("Não foi possível cadastrar. Tente novamente.")}}
 // delFunc = remove um funcionário (só contas com cargo de funcionário; nunca o admin).
 function delFunc(i){const u=users[i];if(!isAdm()||!u||(u.role!="func"&&u.role!="rest")||!confirm("Remover "+u.nome+"?"))return;users.splice(i,1);ls.set("users",users);admin();toast("Funcionário removido")}
-seedAdmin();
+const ready=seedAdmin();
 
 // ---------- Login e painel do restaurante ----------
 // isRest = a pessoa logada é de um restaurante (conta com role "rest" ligada a um restaurante existente). myR = o restaurante dela.
@@ -294,7 +318,7 @@ if(!r)return aerr("Escolha o restaurante.");
 if(!okEmail(email))return aerr("Digite um e-mail válido.");
 if(!pwOk(pw))return aerr("A senha precisa ter de 8 a 64 caracteres, com letras e números.");
 if(users.some(u=>u.email==email))return aerr("Já existe uma conta com esse e-mail.");
-try{const salt=rndSalt(),hash=await hashPw(pw,salt);users.push({nome:r.n,email,salt,hash,criado:Date.now(),role:"rest",cargo:"Restaurante",rid:r.id});ls.set("users",users);admin();toast("Login criado para "+r.n)}
+try{const cr=await cred(pw);users.push({nome:r.n,email,...cr,criado:Date.now(),role:"rest",cargo:"Restaurante",rid:r.id});ls.set("users",users);admin();toast("Login criado para "+r.n)}
 catch(e){aerr("Não foi possível criar o login. Tente novamente.")}}
 // restPanel = painel do restaurante: entrega e taxas, novo prato e lista do cardápio (esgotar / excluir).
 function restPanel(){const r=myR();
@@ -313,3 +337,30 @@ function toggleOut(i){if(!isRest())return;const k=myR().id+"-"+i;if(OUT[k])delet
 function delDish(i){if(!isRest())return;const r=myR();if(r.m.length<2)return toast("O cardápio precisa ter pelo menos um prato");if(!confirm("Excluir "+r.m[i][0]+"?"))return;
 r.m.splice(i,1);const n={};for(const[k,v]of Object.entries(OUT)){const[a,b]=k.split("-").map(Number);if(a!=r.id||b<i)n[k]=v;else if(b>i)n[a+"-"+(b-1)]=v}
 Object.keys(OUT).forEach(k=>delete OUT[k]);Object.assign(OUT,n);ls.set("out",OUT);if(cart.rid==r.id)cart={rid:null,items:{}};persistR();upd();restPanel();toast("Prato excluído")}
+
+// ---------- Administradores: criar outro admin, trocar a própria senha, remover ----------
+// admAdmins = aba com formulário de novo admin, troca de senha e a lista de administradores.
+const admAdmins=()=>{const al=users.filter(u=>u.role=="admin");return`<form class="box af" onsubmit="addAdmin(event)" novalidate><h3>Novo administrador</h3><input id="an2" aria-label="Nome" placeholder="Nome" maxlength="60" autocomplete="off"><input id="ae" type="email" aria-label="E-mail" placeholder="email do administrador" maxlength="120" autocomplete="off"><input id="ap" type="text" aria-label="Senha provisória" placeholder="Senha provisória (mín. 8, com letra e número)" maxlength="64" autocomplete="off"><div id="aerr" class="warn" role="alert"></div><button class="cta" type="submit">Criar administrador</button></form><form class="box af" onsubmit="chgPw(event)" novalidate><h3>Trocar minha senha</h3><input id="po" type="password" aria-label="Senha atual" placeholder="Senha atual" autocomplete="current-password" maxlength="64"><input id="pn" type="password" aria-label="Nova senha" placeholder="Nova senha (mín. 8, com letra e número)" autocomplete="new-password" maxlength="64"><div id="aerr2" class="warn" role="alert"></div><button class="cta" type="submit">Salvar nova senha</button></form><div class="box"><h3>Administradores</h3>${al.map(u=>`<div class="line"><span><b>${esc(u.nome)}</b><br><span class="mute">${esc(u.email)}</span></span>${u.email==sess?'<span class="mute sm">você</span>':`<button class="bo" onclick="delAdm(${users.indexOf(u)})">Remover</button>`}</div>`).join("")}</div>`};
+// addAdmin = cria outra conta de administrador.
+async function addAdmin(ev){ev.preventDefault();if(!isAdm())return;
+const nome=cl($("#an2").value),email=normEmail($("#ae").value),pw=$("#ap").value;
+if(nome.length<2)return aerr("Digite o nome do administrador.");
+if(!okEmail(email))return aerr("Digite um e-mail válido.");
+if(!pwOk(pw))return aerr("A senha precisa ter de 8 a 64 caracteres, com letras e números.");
+if(users.some(u=>u.email==email))return aerr("Já existe uma conta com esse e-mail.");
+try{const cr=await cred(pw);users.push({nome,email,...cr,criado:Date.now(),role:"admin",seedv:SEED_V});ls.set("users",users);admin();toast("Administrador criado")}
+catch(e){aerr("Não foi possível criar. Tente novamente.")}}
+// chgPw = troca a senha do admin logado (pede a senha atual).
+async function chgPw(ev){ev.preventDefault();if(!isAdm())return;const e2=m=>{$("#aerr2").textContent=m},u=user(),po=$("#po").value,pn=$("#pn").value;
+if(!po)return e2("Digite a senha atual.");
+if(!pwOk(pn))return e2("A nova senha precisa ter de 8 a 64 caracteres, com letras e números.");
+if(po===pn)return e2("A nova senha precisa ser diferente da atual.");
+try{if(await checkPw(u,po)!="ok")return e2("Senha atual incorreta.");Object.assign(u,await cred(pn));ls.set("users",users);admin();admTab="a";toast("Senha alterada")}
+catch(e){e2("Não foi possível trocar a senha.")}}
+// delAdm = remove outro administrador (nunca você mesmo, o último admin ou as contas padrão).
+function delAdm(i){const u=users[i];if(!isAdm()||!u||u.role!="admin"||u.email==sess)return;
+if(ADMINS.some(a=>a[1]==u.email))return toast("As contas padrão não podem ser removidas");
+if(!confirm("Remover o administrador "+u.nome+"?"))return;users.splice(i,1);ls.set("users",users);admin();toast("Administrador removido")}
+// Atalho: abrir o site com #admin no final do endereço mostra o login administrativo.
+const chkHash=()=>{if(location.hash=="#admin"){try{history.replaceState(null,"",location.pathname+location.search)}catch(e){}adminLogin()}};
+addEventListener("hashchange",chkHash);ready.then(chkHash);
