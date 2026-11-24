@@ -113,3 +113,7 @@ textarea{width:100%;border:1.5px solid var(--line);border-radius:12px;padding:10
 @media(prefers-reduced-motion:no-preference){.tt,.tt *,.tt *::before,.tt *::after{transition:background-color .45s ease,color .45s ease,border-color .45s ease,box-shadow .45s ease,fill .45s ease!important}}
 /* BOTÃO DE LOGIN: limita a largura para um nome comprido não quebrar o cabeçalho. */
 #lg{max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* PAINEL ADMIN: título, formulários (.af) e linhas de item do cardápio (.mi). */
+.adm h1{margin:14px 0 8px;font-size:26px;letter-spacing:-.03em}.adm .box{margin:14px 0}.adm .line{border-top:1px solid var(--line)}.af input{border:1.5px solid var(--line);border-radius:12px;padding:10px 12px;background:var(--bg);width:100%;margin:4px 0}.af select{margin:4px 0}.mi{flex-wrap:wrap;padding-bottom:8px;border-bottom:1px dashed var(--line)}.mi input{flex:1 1 40%;margin:0}.mi input.xe{flex:0 0 64px;text-align:center}.mi input.xd{flex:1 1 100%}
+/* Painel do restaurante: rótulos dos campos e botões de cada prato. */
+.af label{display:block;margin-top:8px}.adm .line .acts{display:flex;gap:6px;flex:none;flex-wrap:wrap;justify-content:flex-end}
